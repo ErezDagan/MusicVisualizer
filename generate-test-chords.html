@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Generate Test Chords</title>
+  <style>
+    body { background: #111; color: #ccc; font-family: monospace; display: flex;
+           flex-direction: column; align-items: center; justify-content: center;
+           height: 100vh; margin: 0; gap: 16px; }
+    button { padding: 12px 28px; font-size: 16px; cursor: pointer;
+             background: #1a3344; color: #88ffcc; border: 1px solid #4488bb;
+             border-radius: 4px; }
+    button:hover { background: #22445a; }
+    p { color: #556; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h2>Test Chord Generator</h2>
+  <p>Synthesizes Am → C → G (3 seconds each) and downloads as WAV</p>
+  <button onclick="generate()">Generate Am→C→G WAV</button>
+  <p id="status"></p>
+  <script>
+  // Chord note frequencies (Hz) — middle octave
+  const CHORDS = {
+    Am: [220.00, 261.63, 329.63],   // A3, C4, E4
+    C:  [261.63, 329.63, 392.00],   // C4, E4, G4
+    G:  [196.00, 246.94, 392.00],   // G3, B3, G4
+  };
+  const ORDER = ['Am', 'C', 'G'];
+  const DURATION_EACH = 3;   // seconds per chord
+  const SAMPLE_RATE = 44100;
+
+  async function generate() {
+    document.getElementById('status').textContent = 'Generating...';
+    const totalDuration = ORDER.length * DURATION_EACH;
+    const totalSamples = totalDuration * SAMPLE_RATE;
+
+    const offlineCtx = new OfflineAudioContext(2, totalSamples, SAMPLE_RATE);
+
+    for (let ci = 0; ci < ORDER.length; ci++) {
+      const chordName = ORDER[ci];
+      const freqs = CHORDS[chordName];
+      const startTime = ci * DURATION_EACH;
+      const endTime = startTime + DURATION_EACH;
+
+      for (const freq of freqs) {
+        // Main oscillator
+        const osc = offlineCtx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+
+        // Also add a harmonic for richness
+        const osc2 = offlineCtx.createOscillator();
+        osc2.type = 'triangle';
+        osc2.frequency.value = freq;
+
+        // Gain with fade-in/out
+        const gain = offlineCtx.createGain();
+        gain.gain.setValueAtTime(0, startTime);
+        gain.gain.linearRampToValueAtTime(0.15, startTime + 0.05);
+        gain.gain.setValueAtTime(0.15, endTime - 0.1);
+        gain.gain.linearRampToValueAtTime(0, endTime);
+
+        const gain2 = offlineCtx.createGain();
+        gain2.gain.value = 0.05;
+
+        osc.connect(gain);
+        osc2.connect(gain2);
+        gain.connect(offlineCtx.destination);
+        gain2.connect(offlineCtx.destination);
+
+        osc.start(startTime);
+        osc.stop(endTime);
+        osc2.start(startTime);
+        osc2.stop(endTime);
+      }
+    }
+
+    const rendered = await offlineCtx.startRendering();
+    const wav = audioBufferToWav(rendered);
+    const blob = new Blob([wav], { type: 'audio/wav' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'test-chords-Am-C-G.wav';
+    a.click();
+    URL.revokeObjectURL(url);
+    document.getElementById('status').textContent = 'Done! WAV downloaded.';
+  }
+
+  // Minimal PCM WAV encoder
+  function audioBufferToWav(buffer) {
+    const numChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const numSamples = buffer.length;
+    const bytesPerSample = 2;
+    const blockAlign = numChannels * bytesPerSample;
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = numSamples * blockAlign;
+    const wavBuffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(wavBuffer);
+
+    function writeStr(offset, str) {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    }
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bytesPerSample * 8, true);
+    writeStr(36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    // Mix channels (interleaved)
+    const channels = [];
+    for (let c = 0; c < numChannels; c++) channels.push(buffer.getChannelData(c));
+    let offset = 44;
+    for (let i = 0; i < numSamples; i++) {
+      for (let c = 0; c < numChannels; c++) {
+        const s = Math.max(-1, Math.min(1, channels[c][i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        offset += 2;
+      }
+    }
+    return wavBuffer;
+  }
+  </script>
+</body>
+</html>
